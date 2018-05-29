@@ -74,7 +74,8 @@ def autoencoder(inputs):
 def main():
     dataset = "dataset"
     exists = os.path.exists(dataset)
-    empty = not os.listdir(dataset)
+
+    empty = not os.listdir(dataset) if exists else True
     if not exists or empty:
         if not exists:
             os.makedirs(dataset)
@@ -86,8 +87,6 @@ def main():
         dataset_size = 0
         while True:
             ret, frame = cap.read()
-            print(ret)
-            print(frame)
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
             faces = face_cascade_classifier.detectMultiScale(
@@ -97,23 +96,30 @@ def main():
                 minSize=(30, 30),
                 flags=cv2.CASCADE_SCALE_IMAGE)
 
-            if faces:
+            if faces.size:
                 original = np.copy(frame)
 
                 # Draw a rectangle around the faces
-                for (x, y, w, h) in faces:
-                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                bigger_id = 0
+                bigger_area = 0
+                for (x, y, w, h), idx in enumerate(faces):
+                    area = w * h
+                    if area > bigger_area:
+                        bigger_id = idx
+                        bigger_area = w * h
+
+                x, y, w, h = faces[bigger_id]
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
                 # Display the resulting frame
                 cv2.imshow('Video', frame)
 
                 if cv2.waitKey() & 0xFF == ord('s'):
-                    for (x, y, w, h) in faces:
-                        face = original[x:x + w, y:y + h]
-                        cv2.imwrite(
-                            os.path.join(dataset,
-                                         str(dataset_size) + ".png"), face)
-                        dataset += 1
+                    face = original[y:y + h, x:x + w]
+                    cv2.imwrite(
+                        os.path.join(dataset,
+                                     str(dataset_size) + ".png"), face)
+                    dataset_size += 1
             else:
                 # Display the resulting frame
                 cv2.imshow('Video', frame)
