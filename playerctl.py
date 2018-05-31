@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
+import tensorflow as tf
 from gi.repository import Playerctl, GLib
+from ml import encoder, get_input_fn
+
+
+def model():
+    input_ = tf.placeholder(tf.int32)
+    input_fn = get_input_fn(input_)
+    input_fn(1, tf.estimator.ModeKeys.PREDICT)
 
 
 def main():
     player = Playerctl.Player(player_name='vlc')
 
-    def on_metadata(player, e):
-        if 'xesam:artist' in e.keys() and 'xesam:title' in e.keys():
-            print('Now playing:')
-            print('{artist} - {title}'.format(
-                artist=e['xesam:artist'][0], title=e['xesam:title']))
-
     def on_play(player):
-        # capture current user face with headphones on
-        print('Playing at volume {}'.format(player.props.volume))
+        # capture current user face and check if it has headphones on
+        pass
 
     def on_pause(player):
-        #
-        print('Paused the song: {}'.format(player.get_title()))
+        # wait for the user to get the headphones on again
+        pass
 
     player.on('play', on_play)
     player.on('pause', on_pause)
-    player.on('metadata', on_metadata)
 
     # wait for events
     main = GLib.MainLoop()

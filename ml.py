@@ -22,8 +22,6 @@ def encoder(inputs):
 
 def decoder(latent, units):
     with tf.variable_scope("decoder"):
-        l2_regularizer = tf.contrib.layers.l2_regularizer(1e-5)
-
         reconstruction = tf.layers.dense(
             latent,
             units,
@@ -41,10 +39,10 @@ def autoencoder(inputs):
     return reconstructions
 
 
-def get_input_fn(dataset):
+def get_input_fn(data_source):
 
     use_placeholder = isinstance(
-        dataset, tf.Tensor) and 'placeholder' in dataset.name.lower()
+        data_source, tf.Tensor) and 'placeholder' in data_source.name.lower()
 
     def input_fn(batch_size, mode, num_epochs=1):
 
@@ -67,19 +65,20 @@ def get_input_fn(dataset):
         def _input_fn():
             if not use_placeholder:
                 filename_dataset = tf.data.Dataset.list_files(
-                    "{}/*.png".format(dataset))
+                    "{}/*.png".format(data_source))
                 image_dataset = filename_dataset.map(lambda filename: tf.image.decode_png(tf.read_file(filename)))
                 image_dataset = image_dataset.map(parser)
-                if mode == tf.estimator.ModeKeys.TRAIN:
-                    image_dataset = image_dataset.repeat(num_epochs).shuffle(
-                        10000)
+                if mode == tf.estimator.ModeKeys.TRAIN or mode == tf.estimator.ModeKeys.EVAL:
+                    image_dataset = image_dataset.repeat(num_epochs)
+                    if mode == tf.estimator.ModeKeys.TRAIN:
+                        image_dataset = image_dataset.shuffle(1000)
 
                 image_dataset = image_dataset.batch(batch_size)
                 iterator = image_dataset.make_one_shot_iterator()
                 return iterator.get_next()
 
-            #dataset is placeholder
-            return parser(dataset)
+            #data_source is placeholder
+            return parser(data_source)
 
         return _input_fn
 
@@ -87,7 +86,12 @@ def get_input_fn(dataset):
 
 
 def model_fn(features, labels, mode):
-    reconstructions = autoencoder(features)
+
+    ema = tf.train.ExponentialMovingAverage(decay=0.9999)
+    latent = encoder(features)
+
+    average_latent = ema.average(latent)
+    reconstructions = decoder(features, features.shape[-1])
 
     loss = tf.losses.mean_squared_error(features, reconstructions)
     loss = loss + tf.losses.get_regularization_loss()
@@ -97,8 +101,11 @@ def model_fn(features, labels, mode):
         optimizer = tf.train.AdamOptimizer(1e-5)
 
         # Create training operation
-        train_op = optimizer.minimize(
+        opt_op = optimizer.minimize(
             loss=loss, global_step=tf.train.get_global_step())
+
+        with tf.control_dependencies([opt_op]):
+            train_op = ema.apply([latent])
 
         return tf.estimator.EstimatorSpec(
             mode, predictions=reconstructions, loss=loss, train_op=train_op)
@@ -114,6 +121,31 @@ def model_fn(features, labels, mode):
 
     assert mode == tf.estimator.ModeKeys.PREDICT
     return tf.estimator.EstimatorSpec(mode, predictions=reconstructions)
+
+
+def detect_face(face_cascade_classifier, frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    faces = np.array(
+        face_cascade_classifier.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(40, 40),
+            flags=cv2.CASCADE_SCALE_IMAGE))
+
+    if faces.size:
+        bigger_id = 0
+        bigger_area = 0
+        for idx, (_, _, w, h) in enumerate(faces):
+            area = w * h
+            if area > bigger_area:
+                bigger_id = idx
+                bigger_area = w * h
+
+        return faces[bigger_id]  # (x,y,w,h)
+
+    return None
 
 
 def main():
@@ -132,40 +164,27 @@ def main():
         dataset_size = 0
         while True:
             _, frame = cap.read()
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            face_rect = detect_face(face_cascade_classifier, frame)
 
-            faces = np.array(
-                face_cascade_classifier.detectMultiScale(
-                    gray,
-                    scaleFactor=1.1,
-                    minNeighbors=5,
-                    minSize=(40, 40),
-                    flags=cv2.CASCADE_SCALE_IMAGE))
-
-            if faces.size:
+            if face_rect is not None:
                 original = np.copy(frame)
-
-                # Draw a rectangle around the faces
-                bigger_id = 0
-                bigger_area = 0
-                for idx, (x, y, w, h) in enumerate(faces):
-                    area = w * h
-                    if area > bigger_area:
-                        bigger_id = idx
-                        bigger_area = w * h
-
-                x, y, w, h = faces[bigger_id]
+                x, y, w, h = face_rect
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
                 # Display the resulting frame
                 cv2.imshow('Video', frame)
 
-                if cv2.waitKey() & 0xFF == ord('s'):
+                key = cv2.waitKey() & 0xFF
+
+                if key == ord('s'):
                     face = original[y:y + h, x:x + w]
                     cv2.imwrite(
                         os.path.join(dataset,
                                      str(dataset_size) + ".png"), face)
                     dataset_size += 1
+                elif key == ord('q'):
+                    cv2.destroyAllWindows()
+                    break
             else:
                 # Display the resulting frame
                 cv2.imshow('Video', frame)
@@ -175,7 +194,8 @@ def main():
                 break
 
     tf.logging.set_verbosity(tf.logging.INFO)
-    config = tf.estimator.RunConfig("./model_dir/", save_summary_steps=10)
+    config = tf.estimator.RunConfig(
+        "./model_dir/", save_summary_steps=10, save_checkpoints_steps=100)
     model = tf.estimator.Estimator(model_fn, config=config)
 
     input_fn = get_input_fn(dataset)
