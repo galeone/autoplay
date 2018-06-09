@@ -39,6 +39,33 @@ def autoencoder(inputs):
     return reconstructions
 
 
+def get_parser_fn(mode):
+
+    def parser(image):
+        is_batch = len(image.shape) == 4
+        shape = (50, 50)
+        if image.shape[-1] == 3:
+            image = tf.image.rgb_to_grayscale(image)
+
+        image = tf.image.resize_images(image, shape)
+
+        image = tf.image.convert_image_dtype(image, dtype=tf.float32)
+        image = (image - .5) * 2.  # [-1, 1]
+
+        if mode == tf.estimator.ModeKeys.TRAIN:
+            image = tf.image.random_flip_left_right(image)
+            image = image + tf.random_normal(tf.shape(image), stddev=1e-3)
+
+        image = tf.clip_by_value(image, -1., 1.)
+        if is_batch:
+            image = tf.reshape(image, (tf.shape(image)[0], shape[0] * shape[1]))
+        else:
+            image = tf.reshape(image, (shape[0] * shape[1],))
+        return image
+
+    return parser
+
+
 def get_input_fn(data_source):
 
     use_placeholder = isinstance(
@@ -46,23 +73,8 @@ def get_input_fn(data_source):
 
     def input_fn(batch_size, mode, num_epochs=1):
 
-        def parser(image):
-            shape = (80, 80)
-            image = tf.image.rgb_to_grayscale(image)
-            image = tf.image.resize_images(image, shape)
-
-            image = tf.image.convert_image_dtype(image, dtype=tf.float32)
-            image = (image - .5) * 2.  # [-1, 1]
-
-            if mode == tf.estimator.ModeKeys.TRAIN:
-                image = tf.image.random_flip_left_right(image)
-                image = image + tf.random_normal(tf.shape(image), stddev=1e-3)
-
-            image = tf.clip_by_value(image, -1., 1.)
-            image = tf.reshape(image, (shape[0] * shape[1],))
-            return image
-
         def _input_fn():
+            parser = get_parser_fn(mode)
             if not use_placeholder:
                 filename_dataset = tf.data.Dataset.list_files(
                     "{}/*.png".format(data_source))
@@ -78,7 +90,7 @@ def get_input_fn(data_source):
                 return iterator.get_next()
 
             #data_source is placeholder
-            return parser(data_source)
+            return parser(data_source, mode)
 
         return _input_fn
 
@@ -86,41 +98,32 @@ def get_input_fn(data_source):
 
 
 def model_fn(features, labels, mode):
-
-    ema = tf.train.ExponentialMovingAverage(decay=0.9999)
     latent = encoder(features)
+    reconstructions = decoder(latent, features.shape[-1])
 
-    average_latent = ema.average(latent)
-    reconstructions = decoder(features, features.shape[-1])
-
-    loss = tf.losses.mean_squared_error(features, reconstructions)
-    loss = loss + tf.losses.get_regularization_loss()
+    mse = tf.losses.mean_squared_error(features, reconstructions)
+    loss = mse + tf.losses.get_regularization_loss()
 
     if mode == tf.estimator.ModeKeys.TRAIN:
         # Create Optimiser
         optimizer = tf.train.AdamOptimizer(1e-5)
 
         # Create training operation
-        opt_op = optimizer.minimize(
+        train_op = optimizer.minimize(
             loss=loss, global_step=tf.train.get_global_step())
-
-        with tf.control_dependencies([opt_op]):
-            train_op = ema.apply([latent])
 
         return tf.estimator.EstimatorSpec(
             mode, predictions=reconstructions, loss=loss, train_op=train_op)
 
     if mode == tf.estimator.ModeKeys.EVAL:
-        return tf.estimator.EstimatorSpec(
-            mode,
-            loss=loss,
-            eval_metric_ops={
-                "rmse":
-                tf.metrics.root_mean_squared_error(features, reconstructions)
-            })
+        return tf.estimator.EstimatorSpec(mode, loss=loss)
 
     assert mode == tf.estimator.ModeKeys.PREDICT
-    return tf.estimator.EstimatorSpec(mode, predictions=reconstructions)
+    return tf.estimator.EstimatorSpec(
+        mode, predictions={
+            "reconstructions": reconstructions,
+            "mse": mse
+        })
 
 
 def detect_face(face_cascade_classifier, frame):
@@ -195,11 +198,11 @@ def main():
 
     tf.logging.set_verbosity(tf.logging.INFO)
     config = tf.estimator.RunConfig(
-        "./model_dir/", save_summary_steps=10, save_checkpoints_steps=100)
+        "./model_dir/", save_summary_steps=10, save_checkpoints_steps=10)
     model = tf.estimator.Estimator(model_fn, config=config)
 
     input_fn = get_input_fn(dataset)
-    model.train(input_fn(32, tf.estimator.ModeKeys.TRAIN, 500))
+    model.train(input_fn(32, tf.estimator.ModeKeys.TRAIN, 15))
     model.evaluate(input_fn(32, tf.estimator.ModeKeys.EVAL))
 
 
