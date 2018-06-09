@@ -44,8 +44,10 @@ def get_parser_fn(mode):
     def parser(image):
         is_batch = len(image.shape) == 4
         shape = (50, 50)
-        if image.shape[-1] == 3:
-            image = tf.image.rgb_to_grayscale(image)
+
+        image = tf.cond(
+            tf.equal(tf.shape(image)[-1], 3),
+            lambda: tf.image.rgb_to_grayscale(image), lambda: image)
 
         image = tf.image.resize_images(image, shape)
 
@@ -202,7 +204,7 @@ def main():
     model = tf.estimator.Estimator(model_fn, config=config)
 
     input_fn = get_input_fn(dataset)
-    model.train(input_fn(32, tf.estimator.ModeKeys.TRAIN, 15))
+    model.train(input_fn(32, tf.estimator.ModeKeys.TRAIN, 400))
     model.evaluate(input_fn(32, tf.estimator.ModeKeys.EVAL))
 
 
