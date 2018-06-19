@@ -50,9 +50,9 @@ class WebcamVideoStream:
 def facer(player):
     face_cascade_classifier = cv2.CascadeClassifier(
         "resources/haarcascade_frontalface_default.xml")
-    thres = 0.5
-    cap = cv2.VideoCapture(0)
-    #cap = WebcamVideoStream()
+    thres = 0.56
+    #cap = cv2.VideoCapture(0)
+    cap = WebcamVideoStream().start()
 
     tick = 20
 
@@ -64,15 +64,17 @@ def facer(player):
     loss = tf.losses.mean_squared_error(parsed_input, reconstructions)
     saver = tf.train.Saver()
 
-    with tf.Session() as sess:
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    with tf.Session(config=config) as sess:
         saver.restore(sess, estimator.latest_checkpoint())
 
         paused = False
         squared_error_vals = []
         not_detected = 0
         while True:
-            _, frame = cap.read()
-            #frame = cap.read()
+            #_, frame = cap.read()
+            frame = cap.read()
             face_rect = detect_face(face_cascade_classifier, frame)
             if face_rect is not None:
                 not_detected = 0
@@ -81,6 +83,8 @@ def facer(player):
                 y -= 30
                 w += 30
                 h += 30
+                if x < 0 or y < 0 or w > frame.shape[0] or h > frame.shape[1]:
+                    continue
                 face = frame[y:y + h, x:x + w]
                 squared_error_val = sess.run(
                     loss, feed_dict={input_: np.expand_dims(face, axis=0)})
