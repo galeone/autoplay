@@ -174,6 +174,10 @@ def main():
             if face_rect is not None:
                 original = np.copy(frame)
                 x, y, w, h = face_rect
+                x -= 30
+                y -= 30
+                w += 30
+                h += 30
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
                 # Display the resulting frame
@@ -204,7 +208,7 @@ def main():
     model = tf.estimator.Estimator(model_fn, config=config)
 
     input_fn = get_input_fn(dataset)
-    model.train(input_fn(32, tf.estimator.ModeKeys.TRAIN, 400))
+    model.train(input_fn(32, tf.estimator.ModeKeys.TRAIN, 1000))
     model.evaluate(input_fn(32, tf.estimator.ModeKeys.EVAL))
 
 
